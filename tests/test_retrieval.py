@@ -1,7 +1,13 @@
 import hashlib
 from pathlib import Path
 
-from coding_copilot_copy.retrieval import chunk_source, ensure_index, hybrid_search, _rrf
+from coding_copilot_copy.retrieval import (
+    _iter_indexable_files,
+    chunk_source,
+    ensure_index,
+    hybrid_search,
+    _rrf,
+)
 
 
 def _fake_embed(texts: list[str]) -> list[list[float]]:
@@ -12,10 +18,35 @@ def _fake_embed(texts: list[str]) -> list[list[float]]:
     return vectors
 
 
-def test_chunk_splits_on_class_header() -> None:
-    text = "package demo;\n\npublic class A {}\n\npublic class B {}\n"
-    chunks = chunk_source("Demo.java", text)
-    assert len(chunks) >= 2
+def test_chunk_splits_long_files_with_overlap() -> None:
+    text = "\n".join(f"line {i}" for i in range(1, 201))
+    chunks = chunk_source("long.py", text)
+    assert len(chunks) == 2
+    assert chunks[0]["start_line"] == 1 and chunks[0]["end_line"] == 120
+    assert chunks[1]["start_line"] == 101 and chunks[1]["end_line"] == 200
+
+
+def test_index_size_limits_by_suffix(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    # 600 KiB source: allowed (2 MiB cap)
+    (repo / "Big.java").write_bytes(b"x" * (600 * 1024))
+    # 600 KiB json: skipped (512 KiB cap)
+    (repo / "big.json").write_bytes(b"x" * (600 * 1024))
+    # lockfile: never indexed
+    (repo / "package-lock.json").write_text('{"name":"x"}\n', encoding="utf-8")
+    paths = {rel for rel, _ in _iter_indexable_files(repo)}
+    assert "Big.java" in paths
+    assert "big.json" not in paths
+    assert "package-lock.json" not in paths
+
+
+def test_chunk_breaks_on_blank_line_when_possible() -> None:
+    body = [f"x{i}" for i in range(1, 111)]
+    body.append("")
+    body.extend(f"y{i}" for i in range(1, 25))
+    chunks = chunk_source("mix.txt", "\n".join(body))
+    assert chunks[0]["end_line"] == 110
     assert chunks[0]["start_line"] == 1
 
 
