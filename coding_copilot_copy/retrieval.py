@@ -1,14 +1,12 @@
-"""Hybrid codebase retrieval: syntactic chunks, embeddings, FTS, RRF.
+"""Hybrid codebase retrieval: line-window chunks, embeddings, FTS, RRF.
 
-Industry-shaped pipeline used by Copilot/Cursor-style agents:
-chunk -> embed -> vector search ∪ lexical search -> reciprocal rank fusion.
+Pipeline: chunk by fixed line windows -> embed -> vector ∪ lexical -> RRF.
 """
 
 from __future__ import annotations
 
 import hashlib
 import os
-import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -30,7 +28,28 @@ EMBEDDING_DIM = 1536
 DEFAULT_HYBRID_RESULTS = 8
 MAX_HYBRID_RESULTS = 20
 _RRF_K = 60
-_MAX_INDEX_FILE_BYTES = 512_000
+# Per-type size caps (source code may be large; data/lock files stay small).
+_MAX_INDEX_SOURCE_BYTES = 2_097_152  # 2 MiB
+_MAX_INDEX_DOC_BYTES = 1_048_576  # 1 MiB
+_MAX_INDEX_DATA_BYTES = 512_000
+_DATA_LIKE_SUFFIXES = frozenset({".json", ".txt", ".xml", ".yml", ".yaml", ".properties"})
+_DOC_SUFFIXES = frozenset({".md"})
+_SKIP_INDEX_FILENAMES = frozenset(
+    {
+        "package-lock.json",
+        "yarn.lock",
+        "pnpm-lock.yaml",
+        "Cargo.lock",
+        "poetry.lock",
+        "Gemfile.lock",
+    }
+)
+# Language-agnostic chunking (bump _INDEX_FORMAT_VERSION when these change).
+_CHUNK_LINES = 120
+_CHUNK_OVERLAP_LINES = 20
+_CHUNK_MIN_LINES = 40
+_CHUNK_BREAK_LOOKBACK = 30
+_INDEX_FORMAT_VERSION = "generic-chunk-v2"
 _INDEX_SUFFIXES = frozenset(
     {
         ".java",
@@ -52,16 +71,6 @@ _INDEX_SUFFIXES = frozenset(
         ".txt",
     }
 )
-_HEADER = re.compile(
-    r"^\s*(?:"
-    r"@(?:SystemMessage|UserMessage|AiService)\b"
-    r"|(?:public|private|protected|internal|export|async|static|final|open)*\s*"
-    r"(?:class|interface|enum|record|def|function|fn|func)\s+\w+"
-    r")",
-    re.MULTILINE,
-)
-
-
 class RetrievalError(Exception):
     """Raised when indexing or hybrid search fails."""
 
@@ -101,26 +110,37 @@ def _embed_fn_from_env() -> EmbedFn:
     return _embed
 
 
+def _soft_chunk_end(lines: list[str], start: int, hard_end: int) -> int:
+    """End before a blank line when possible, without going under min size."""
+    if hard_end >= len(lines) or hard_end - start < _CHUNK_MIN_LINES:
+        return hard_end
+    scan_from = max(start + _CHUNK_MIN_LINES, hard_end - _CHUNK_BREAK_LOOKBACK)
+    for i in range(hard_end - 1, scan_from - 1, -1):
+        if not lines[i].strip() and i > start:
+            return i
+    return hard_end
+
+
 def chunk_source(rel_path: str, text: str) -> list[dict[str, Any]]:
-    """Split a file into syntactic-ish chunks (headers / size), with path metadata."""
+    """Split a file into overlapping windows with optional breaks on blank lines."""
     lines = text.splitlines()
     if not lines:
         return []
-    bounds = [0]
-    for i, line in enumerate(lines):
-        if i == 0:
-            continue
-        if _HEADER.search(line) and i - bounds[-1] >= 4:
-            bounds.append(i)
-    bounds.append(len(lines))
     chunks: list[dict[str, Any]] = []
-    for start, end in zip(bounds, bounds[1:]):
-        while end - start > 120:
-            mid = start + 120
-            chunks.append(_chunk(rel_path, lines, start, mid))
-            start = mid
-        if start < end:
-            chunks.append(_chunk(rel_path, lines, start, end))
+    start = 0
+    total = len(lines)
+    while start < total:
+        hard_end = min(start + _CHUNK_LINES, total)
+        end = _soft_chunk_end(lines, start, hard_end)
+        if end <= start:
+            end = min(start + 1, total)
+        chunks.append(_chunk(rel_path, lines, start, end))
+        if end >= total:
+            break
+        next_start = end - _CHUNK_OVERLAP_LINES
+        if next_start <= start:
+            next_start = end
+        start = next_start
     return chunks
 
 
@@ -135,7 +155,18 @@ def _chunk(rel_path: str, lines: list[str], start: int, end: int) -> dict[str, A
 
 
 def _file_hash(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+    """Fingerprint file text plus chunking version so index rebuilds after strategy changes."""
+    payload = f"{_INDEX_FORMAT_VERSION}\n{text}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _max_index_bytes(suffix: str) -> int:
+    lower = suffix.lower()
+    if lower in _DOC_SUFFIXES:
+        return _MAX_INDEX_DOC_BYTES
+    if lower in _DATA_LIKE_SUFFIXES:
+        return _MAX_INDEX_DATA_BYTES
+    return _MAX_INDEX_SOURCE_BYTES
 
 
 def _iter_indexable_files(repo_root: Path) -> list[tuple[str, Path]]:
@@ -150,7 +181,9 @@ def _iter_indexable_files(repo_root: Path) -> list[tuple[str, Path]]:
         rel = path.relative_to(repo_root).as_posix()
         if any(_is_restricted_name(part) for part in Path(rel).parts):
             continue
-        if path.stat().st_size > _MAX_INDEX_FILE_BYTES:
+        if path.name.lower() in _SKIP_INDEX_FILENAMES:
+            continue
+        if path.stat().st_size > _max_index_bytes(path.suffix):
             continue
         found.append((rel, path))
     return found

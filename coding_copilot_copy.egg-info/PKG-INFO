@@ -1,0 +1,15 @@
+Metadata-Version: 2.4
+Name: coding-copilot-copy
+Version: 0.1.0
+Summary: Local coding assistant that answers repository questions with source citations.
+Requires-Python: >=3.10
+Requires-Dist: typer>=0.12
+Requires-Dist: langchain>=0.3
+Requires-Dist: langchain-core>=0.3
+Requires-Dist: langchain-openai>=0.2
+Requires-Dist: langgraph>=0.2
+Requires-Dist: langgraph-checkpoint-postgres>=2.0
+Requires-Dist: pgvector>=0.3
+Requires-Dist: python-dotenv>=1.0
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"
