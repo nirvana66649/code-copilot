@@ -16,11 +16,14 @@ dependencies = [
     "langgraph-checkpoint-postgres>=2.0",
     "pgvector>=0.3",
     "python-dotenv>=1.0",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
 ]
 #cmd
 
 [project.scripts]
-coding-copilot = "coding_copilot_copy.cli:main" 
+coding-copilot = "coding_copilot_copy.cli:main"
+coding-copilot-serve = "coding_copilot_copy.server:main" 
 
 # 表示开发时才装 pytest：
 [project.optional-dependencies]

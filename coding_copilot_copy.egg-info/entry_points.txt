@@ -1,2 +1,3 @@
 [console_scripts]
 coding-copilot = coding_copilot_copy.cli:main
+coding-copilot-serve = coding_copilot_copy.server:main
