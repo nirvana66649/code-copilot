@@ -5,6 +5,7 @@ coding_copilot_copy/cli.py
 coding_copilot_copy/model.py
 coding_copilot_copy/prompts.py
 coding_copilot_copy/retrieval.py
+coding_copilot_copy/server.py
 coding_copilot_copy/tools.py
 coding_copilot_copy/workspace.py
 coding_copilot_copy.egg-info/PKG-INFO
@@ -15,6 +16,7 @@ coding_copilot_copy.egg-info/requires.txt
 coding_copilot_copy.egg-info/top_level.txt
 tests/test_glob.py
 tests/test_retrieval.py
+tests/test_server_serialize.py
 tests/test_tool_limit.py
 tests/test_trace.py
 tests/test_workspace_write.py

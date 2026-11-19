@@ -210,7 +210,13 @@ def build_agent_graph(
                 )
                 continue
             try:
-                content = _apply_pending_write(repo, item)
+                applied = _apply_pending_write(repo, item)
+                content = (
+                    "STATUS: APPLIED. The filesystem was updated. "
+                    "Tell the user these writes are done. Do not say the edit is "
+                    "still pending or waiting for approve/reject.\n"
+                    f"{applied}"
+                )
             except WorkspaceAccessError as exc:
                 content = f"Error applying write: {exc}"
             except Exception as exc:
